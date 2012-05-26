@@ -1,0 +1,192 @@
+#!/usr/bin/env ruby
+
+require 'rubygems'
+require 'facter'
+require 'open3'
+require 'optparse'
+require 'thread'
+require 'tmpdir'
+
+module Subtree
+
+  MODULE_PATTERNS = [
+    'modules/internal/*/',
+    'modules/public/*/',
+    'data/',
+    'manifests/'
+  ]
+
+  class Publish
+    def initialize(arguments)
+      ENV.delete('GIT_DIR')
+      @arguments = arguments
+      @options   = {
+        :glob    => ['modules/*/'],
+      }
+    end
+
+    def run
+      begin
+        unless parsed_options? && arguments_valid?
+          abort "ERROR: invalid arguments given."
+        end
+        Dir.mktmpdir do |tmpdir|
+          Dir.chdir(tmpdir) do
+            unless execute("git clone #{@options[:source]} .")
+              abort "ERROR: unable to clone #{@options[:source]}"
+            end
+            self.create
+            self.copy   if @options[:copy]
+            self.mirror if @options[:mirror]
+          end
+        end
+      rescue SignalException => e
+        puts "Abort (ctrl-c)"
+        raise SystemExit
+      end
+    end
+
+    def create
+      verbose = @options[:verbose]
+      submodules = Array.new
+      @options[:glob].each do |pattern|
+        submodules += Dir.glob(pattern).map { |m| m.sub(/\/$/, '') }
+      end
+
+      Facter.loadfacts
+      threadcount = (Facter.processorcount || 1) + 1
+      thread = Array.new
+      mutex  = Mutex.new
+
+      puts "using #{threadcount} threads" if verbose
+      threadcount.times do |i|
+        thread[i] = Thread.new do
+          current_module = String.new
+          loop do
+
+            mutex.synchronize do
+              current_module = submodules.first || Thread.current.exit
+              submodules.delete(current_module)
+              puts "thread[#{i}]: choose #{current_module}" if verbose
+            end
+
+            branchname = "subtree/#{current_module.sub(/\/$/, '')}"
+            cmd = Array.new
+            cmd << 'git subtree split'
+            cmd << "--prefix #{current_module}"
+            cmd << '--annotate "(subtree) "'
+            cmd << "--branch #{branchname}"
+            cmd << '--rejoin'
+            puts "thread[#{i}]: splitting #{branchname}" if verbose
+            stdin, stdout, stderr = Open3.popen3(cmd.join(' '))
+            stdout.each do |output|
+              puts "thread[#{i}]: " << output if verbose
+            end
+          end
+        end
+      end
+
+      threadcount.times { |i| thread[i].join }
+      puts "done" if verbose
+    end
+
+    def copy
+      Dir.mkdir(@options[:copy])
+      unless execute("git init --bare #{@options[:copy]}")
+        abort "ERROR: Unable to `git init` in #{@options[:copy]}"
+      end
+      unless execute("git push --mirror #{@options[:copy]}")
+        abort "ERROR: Unable to mirror repo to #{@options[:copy]}"
+      end
+    end
+
+    def mirror
+      unless execute("git push --mirror #{@options[:mirror]}")
+        abort "ERROR: Unable to mirror repo to #{@options[:mirror]}"
+      end
+    end
+
+    def execute(command)
+      stdin, stdout, stderr, = Open3.popen3(command)
+      [stdout,stderr].each do |output|
+        output.each do |line|
+          puts line if @options[:verbose]
+        end
+      end
+      $?.exitstatus == 0
+    end
+
+    def parsed_options?
+      opts = OptionParser.new
+      opts.banner = 'Usage: subtree-publish [options]'
+
+      opts.on(
+        '-m',
+        '--mirror REPO',
+        'Specify a remote repository to mirror to'
+      ) { |m| @options[:mirror] = m }
+
+      opts.on(
+        '-c',
+        '--copy DIRECTORY',
+        'Copy the resulting repository to a bare git repo in DIRECTORY'
+      ) { |c| @options[:copy] = c }
+
+      opts.on(
+        '-s',
+        '--source SOURCE',
+        'Specify the source repository to publish'
+      ) { |s| @options[:source] = s }
+
+      opts.on(
+        '-g',
+        '--glob PATTERNS',
+        'A comma-seperated list of glob patterns to define module prefixes'
+      ) { |g| @options[:glob] = g.split(',') }
+
+      opts.separator 'Common options:'
+
+      opts.on(
+        '-v',
+        '--verbose',
+        'Be more verbose'
+      ) { @options[:verbose] = true }
+
+      opts.on(
+        '-h',
+        '--help',
+        'Show this message'
+      ) { puts opts; exit }
+
+      opts.parse!(@arguments) rescue return false
+      true
+    end
+
+    def arguments_valid?
+      valid = true
+      if @options[:mirror]
+        unless execute("git ls-remote #{@options[:mirror]} >/dev/null 2>&1")
+          puts "ERROR: mirror #{@options[:mirror]} invalid (pass-through auth?)"
+          valid = false
+        end
+      end
+
+      if @options[:copy] and File.exists?(@options[:copy])
+        puts "ERROR: #{@options[:copy]} already exists"
+        valid = false
+      end
+
+      if !@options[:source]
+        puts "ERROR: no source specified"
+      elsif !execute("git ls-remote #{@options[:source]} >/dev/null 2>&1")
+        puts "ERROR: source #{@options[:source]} invalid (pass-through auth?)"
+        valid = false
+      end
+      valid
+    end
+  end
+
+end
+
+app = Subtree::Publish.new(ARGV)
+app.run
