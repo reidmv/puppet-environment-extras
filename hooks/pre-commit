@@ -4,7 +4,8 @@ MODULE_PATTERNS = [
   %r{^modules/internal/\w+/},
   %r{^modules/public/\w+/},
   %r{^data/},
-  %r{^manifests/}
+  %r{^manifests/},
+  %r{^extras/}
 ]
 
 def owning_module(path)
