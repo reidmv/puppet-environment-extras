@@ -21,7 +21,7 @@ module Subtree
       ENV.delete('GIT_DIR')
       @arguments = arguments
       @options   = {
-        :glob    => ['modules/*/'],
+        :glob => ['modules/*/']
       }
     end
 
@@ -74,7 +74,7 @@ module Subtree
             cmd = Array.new
             cmd << 'git subtree split'
             cmd << "--prefix #{current_module}"
-            cmd << '--annotate "(subtree) "'
+            cmd << "--annotate '#{@options[:annotate]}'" if @options[:annotate]
             cmd << "--branch #{branchname}"
             cmd << '--rejoin'
             puts "thread[#{i}]: splitting #{branchname}" if verbose
@@ -143,6 +143,12 @@ module Subtree
         '--glob PATTERNS',
         'A comma-seperated list of glob patterns to define module prefixes'
       ) { |g| @options[:glob] = g.split(',') }
+
+      opts.on(
+        '-a',
+        '--annotate ANNOTATION',
+        'The annotation to use with git-subtree splits'
+      ) { |a| @options[:annotate] = a }
 
       opts.separator 'Common options:'
 
