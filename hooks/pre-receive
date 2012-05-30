@@ -1,5 +1,6 @@
 #!/usr/bin/env ruby
 
+MASTER_BRANCH   = 'production'
 MODULE_PATTERNS = [
   %r{^modules/internal/\w+/},
   %r{^modules/public/\w+/},
@@ -36,8 +37,33 @@ end
 
 STDIN.each_line do |input|
   oldrev, newrev, ref = input.split(' ')
+
+  # If the ref is being deleted, abort the check.
+  next if newrev.to_i(16) == 0
+
+  # If the ref being pushed is new, configure the old revision to be the
+  # merge-base of the master branch.
+  if oldrev.to_i(16) == 0
+    IO.popen("git merge-base #{MASTER_BRANCH} #{newrev}").each do |base|
+      oldrev = base.chomp
+    end
+    exit 0 if oldrev.to_i(16) == 0
+  end
+
+  # Check every commit between the merge base (oldrev) and the new revision
+  # for cross-module edits. Abort if any are found.
   IO.popen("git log #{oldrev}..#{newrev} --format=oneline").each do |line|
     rev = line.split(' ').first
+
+    # If there is no merge base for the old revision and the revision being
+    # checked, move along. These are not the commits we're looking for.
+    next unless system("git merge-base #{oldrev} #{rev} >/dev/null 2>&1")
+
+    # If this is a merge commit, move along. We'll get around to the commits
+    # that actually introduced file changes soon enough. Merge commits that
+    # edit files are evil and this hook doesn't deal with them well.
+    next unless !system("git rev-parse #{rev}^2 >/dev/null 2>&1")
+
     module1 = nil
     IO.popen("git diff --name-only #{rev}~1...#{rev}").each do |path|
       module1 ||= owning_module(path)
