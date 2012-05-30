@@ -51,21 +51,19 @@ STDIN.each_line do |input|
   end
 
   # Check every commit between the merge base (oldrev) and the new revision
-  # for cross-module edits. Abort if any are found.
+  # for cross-module edits. Abort and alert the user if any are found.
   IO.popen("git log #{oldrev}..#{newrev} --format=oneline").each do |line|
     rev = line.split(' ').first
 
     # If there is no merge base for the old revision and the revision being
     # checked, move along. These are not the commits we're looking for.
+    # Yes, this means that a malicious user could potentially find a way
+    # around this hook. This hook is not for security.
     next unless system("git merge-base #{oldrev} #{rev} >/dev/null 2>&1")
 
-    # If this is a merge commit, move along. We'll get around to the commits
-    # that actually introduced file changes soon enough. Merge commits that
-    # edit files are evil and this hook doesn't deal with them well.
-    next unless !system("git rev-parse #{rev}^2 >/dev/null 2>&1")
-
     module1 = nil
-    IO.popen("git diff --name-only #{rev}~1...#{rev}").each do |path|
+    IO.popen("git show --pretty='format:' --name-only #{rev}").each do |path|
+      next if path.chomp.empty?
       module1 ||= owning_module(path)
       module2   = owning_module(path)
       if module1 != module2
