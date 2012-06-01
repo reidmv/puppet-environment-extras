@@ -1,6 +1,7 @@
 #!/usr/bin/env ruby
 
 MASTER_BRANCH   = 'production'
+MASTER_ROOT     = 'e7d1cd218a49b39aa4406c99cd8af38f6ee55663'
 MODULE_PATTERNS = [
   %r{^modules/internal/\w+/},
   %r{^modules/public/\w+/},
@@ -55,11 +56,11 @@ STDIN.each_line do |input|
   IO.popen("git log #{oldrev}..#{newrev} --format=oneline").each do |line|
     rev = line.split(' ').first
 
-    # If there is no merge base for the old revision and the revision being
-    # checked, move along. These are not the commits we're looking for.
-    # Yes, this means that a malicious user could potentially find a way
-    # around this hook. This hook is not for security.
-    next unless system("git merge-base #{oldrev} #{rev} >/dev/null 2>&1")
+    # If there is no merge base for root of the master branch and the revision
+    # being checked, move along. These are not the commits we're looking for.
+    # Yes, this means that a malicious user could potentially find a way around
+    # this hook. This hook is not for security.
+    next unless system("git merge-base #{MASTER_ROOT} #{rev} >/dev/null 2>&1")
 
     module1 = nil
     IO.popen("git show --pretty='format:' --name-only #{rev}").each do |path|
