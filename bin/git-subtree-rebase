@@ -95,18 +95,19 @@ module Subtree
 
     def merge_subtree_branches(prefix, merge_branch)
       abort '--branch option required for `merge`' unless merge_branch
-      submodules = get_branches_with_prefix(prefix)
+      modules = get_branches_with_prefix(prefix)
+      modules.map! {|m| m.sub(/^#{prefix}\//, '') }
 
       execute("git symbolic-ref HEAD refs/heads/#{merge_branch}")
       File.delete("#{@git_dir}/index") if File.file?("#{@git_dir}/index")
       execute('git clean -fdx')
       execute 'git commit -m "Root" --allow-empty'
-      submodules.each do |submodule|
+      modules.each do |subtree|
         cmd = Array.new
         cmd << 'git subtree add'
-        cmd << "--prefix #{submodule}"
+        cmd << "--prefix #{subtree}"
         cmd << @git_dir
-        cmd << "#{prefix}/#{submodule}"
+        cmd << "#{prefix}/#{subtree}"
         execute cmd.join(' ')
       end
     end
@@ -114,22 +115,13 @@ module Subtree
     def cleanup(prefix)
       branches = get_branches_with_prefix(prefix)
       branches.each do |branch|
-        branch = "#{prefix.sub(/\/$/, '')}/#{branch}"
         execute("git branch -D #{branch}")
       end
     end
 
     def get_branches_with_prefix(prefix)
-      submodules = Array.new
-      branch_dir = "#{@git_dir}/refs/heads/#{prefix}"
-      begin
-        Dir.chdir(branch_dir) do
-          submodules = Dir.glob('**/**')
-        end
-      rescue Error => e
-        puts "No subtree branches found beginning with the prefix #{prefix}"
-      end
-      submodules.select { |f| File.file?("#{branch_dir}/#{f}") }
+      modules = %x{git rev-parse --symbolic --branches='#{prefix}/*'}.chomp
+      modules = modules.split("\n").map {|m| m.sub(/^refs\/heads\//, '') }
     end
 
     def execute(command)
