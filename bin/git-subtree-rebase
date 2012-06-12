@@ -1,0 +1,216 @@
+#!/usr/bin/env ruby
+
+require 'rubygems'
+require 'facter'
+require 'open3'
+require 'optparse'
+require 'thread'
+require 'tmpdir'
+
+module Subtree
+
+  MODULE_PATTERNS = [
+    'data/',
+    'extras/',
+    'manifests/',
+    'modules/internal/*/',
+    'modules/public/*/'
+  ]
+
+  class Rebase
+    def initialize(arguments)
+      @glob      = MODULE_PATTERNS
+      @prefix    = 'subtree'
+      @verbose   = true
+      @arguments = arguments
+      @git_dir   = %x{git rev-parse --git-dir}.chomp[/.+/m] or nil
+    end
+
+    def run
+      begin
+        unless parsed_options? && arguments_valid?
+          abort "ERROR: invalid arguments given."
+        end
+        ENV['GIT_DIR'] = @git_dir
+
+        case ARGV[0]
+        when 'split'
+          self.create_subtree_branches @prefix
+        when 'merge'
+          self.merge_subtree_branches @prefix, @merge_branch
+        when 'cleanup'
+          self.cleanup @prefix
+        else
+          puts "No mode specified"
+        end
+
+      rescue SignalException => e
+        puts "Abort (ctrl-c)"
+        raise SystemExit
+      end
+    end
+
+    def create_subtree_branches(prefix)
+      submodules = Array.new
+      @glob.each do |pattern|
+        submodules += Dir.glob(pattern).map { |m| m.sub(/\/$/, '') }
+      end
+
+      Facter.loadfacts
+      threadcount = (Facter.processorcount || 1) + 1
+      thread = Array.new
+      mutex  = Mutex.new
+
+      puts "using #{threadcount} threads" if @verbose
+      threadcount.times do |i|
+        thread[i] = Thread.new do
+          current_module = String.new
+          loop do
+
+            mutex.synchronize do
+              current_module = submodules.first || Thread.current.exit
+              submodules.delete(current_module)
+              puts "thread[#{i}]: choose #{current_module}" if @verbose
+            end
+
+            branchname = "#{prefix}/#{current_module.sub(/\/$/, '')}"
+            cmd = Array.new
+            cmd << 'git subtree split'
+            cmd << "--prefix #{current_module}"
+            cmd << "--annotate '#{@annotate}'" if @annotate
+            cmd << "--branch #{branchname}"
+            cmd << '--rejoin'
+            puts "thread[#{i}]: splitting #{branchname}" if @verbose
+            stdin, stdout, stderr = Open3.popen3(cmd.join(' '))
+            stdout.each do |output|
+              puts "thread[#{i}]: " << output if @verbose
+            end
+          end
+        end
+      end
+
+      threadcount.times { |i| thread[i].join }
+      puts "done" if @verbose
+    end
+
+    def merge_subtree_branches(prefix, merge_branch)
+      abort '--branch option required for `merge`' unless merge_branch
+      submodules = get_branches_with_prefix(prefix)
+
+      execute("git symbolic-ref HEAD refs/heads/#{merge_branch}")
+      File.delete("#{@git_dir}/index") if File.file?("#{@git_dir}/index")
+      execute('git clean -fdx')
+      execute 'git commit -m "Root" --allow-empty'
+      submodules.each do |submodule|
+        cmd = Array.new
+        cmd << 'git subtree add'
+        cmd << "--prefix #{submodule}"
+        cmd << @git_dir
+        cmd << "#{prefix}/#{submodule}"
+        execute cmd.join(' ')
+      end
+    end
+
+    def cleanup(prefix)
+      branches = get_branches_with_prefix(prefix)
+      branches.each do |branch|
+        branch = "#{prefix.sub(/\/$/, '')}/#{branch}"
+        execute("git branch -D #{branch}")
+      end
+    end
+
+    def get_branches_with_prefix(prefix)
+      submodules = Array.new
+      branch_dir = "#{@git_dir}/refs/heads/#{prefix}"
+      begin
+        Dir.chdir(branch_dir) do
+          submodules = Dir.glob('**/**')
+        end
+      rescue Error => e
+        puts "No subtree branches found beginning with the prefix #{prefix}"
+      end
+      submodules.select { |f| File.file?("#{branch_dir}/#{f}") }
+    end
+
+    def execute(command)
+      puts "Executing: #{command}" if @verbose
+      stdin, stdout, stderr = Open3.popen3(command)
+      [stdout,stderr].each do |output|
+        output.each do |line|
+          puts line if @verbose
+        end
+      end
+      $?.exitstatus == 0
+    end
+
+    def parsed_options?
+      opts = OptionParser.new
+      opts.banner = <<-EOF.gsub(/^ {8}/, '')
+        Usage: subtree-rebase [mode] [options]
+
+        Modes:
+
+          split  Used to create seperate branches for every subtree in
+                 the project
+          merge  Used to re-merge branches created with the `split` mode.
+
+      EOF
+
+      opts.separator 'Mode options:'
+
+      opts.on(
+        '-g',
+        '--glob PATTERNS',
+        'A comma-seperated list of glob patterns to define module prefixes'
+      ) { |g| @glob = g.split(',') }
+
+      opts.on(
+        '-a',
+        '--annotate ANNOTATION',
+        'The annotation to use with git-subtree splits'
+      ) { |a| @annotate = a }
+
+      opts.on(
+        '-p',
+        '--prefix',
+        'The prefix to use when creating submodule branches'
+      ) { |p| @prefix = p }
+
+      opts.on(
+        '-b',
+        '--branch BRANCH',
+        'Used with `merge`. The merged branch to create'
+      ) { |b| @merge_branch = b }
+
+      opts.separator 'Common options:'
+
+      opts.on(
+        '-q',
+        '--quiet',
+        'Be less verbose'
+      ) { @verbose = false }
+
+      opts.on(
+        '-h',
+        '--help',
+        'Show this message'
+      ) { puts opts; exit }
+
+      opts.parse!(@arguments) rescue return false
+      true
+    end
+
+    def arguments_valid?
+      valid = true
+      if %x{git rev-parse --show-cdup 2>&1}.chomp[/.+/m]
+        puts "You need to run this command from the toplevel of the working tree."
+        valid = false
+      end
+      valid
+    end
+  end
+
+end
+
+app = Subtree::Rebase.new(ARGV)
+app.run
