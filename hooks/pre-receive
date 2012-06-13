@@ -1,13 +1,13 @@
 #!/usr/bin/env ruby
 
 MASTER_BRANCH   = 'production'
-MASTER_ROOT     = 'e7d1cd218a49b39aa4406c99cd8af38f6ee55663'
+MASTER_ROOT     = '04dd72955028dc7e6d2d13d6815db9cd8bcf5444'
 MODULE_PATTERNS = [
-  %r{^modules/internal/\w+/},
-  %r{^modules/public/\w+/},
   %r{^data/},
+  %r{^extras/},
   %r{^manifests/},
-  %r{^extras/}
+  %r{^modules/internal/\w+/},
+  %r{^modules/public/\w+/}
 ]
 
 def owning_module(path)
