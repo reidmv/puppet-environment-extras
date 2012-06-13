@@ -1,11 +1,11 @@
 #!/usr/bin/env ruby
 
 MODULE_PATTERNS = [
-  %r{^modules/internal/\w+/},
-  %r{^modules/public/\w+/},
   %r{^data/},
+  %r{^extras/},
   %r{^manifests/},
-  %r{^extras/}
+  %r{^modules/internal/\w+/},
+  %r{^modules/public/\w+/}
 ]
 
 def owning_module(path)
